@@ -517,7 +517,7 @@ class ResponseParsingTests: XCTestCase {
     // MARK: - BidInfo winning-bid economics (original/GAM API)
 
     // `BidInfo.create` should surface the winning bid's exact economics (cpm/currency/creativeId/
-    // adId/auctionId) alongside the targeting keywords, so integrators on the original API can read
+    // adId/requestId) alongside the targeting keywords, so integrators on the original API can read
     // them without switching to the Rendering API or issuing a second auction.
     func testBidInfoSurfacesWinningBidEconomics() {
         let bidResponse = WinningBidResponseFabricator.makeWinningBidResponse(bidPrice: 3.14)
@@ -528,15 +528,18 @@ class ResponseParsingTests: XCTestCase {
         let bidInfo = BidInfo.create(resultCode: .prebidDemandFetchSuccess, bidResponse: bidResponse)
 
         XCTAssertEqual(bidInfo.resultCode, .prebidDemandFetchSuccess)
-        XCTAssertEqual(bidInfo.cpm, Double(winningBid.price))
-        XCTAssertEqual(bidInfo.currency, bidResponse.rawResponse?.cur)
+        // cpm is the raw ORTB price (NSNumber), carried exactly — no Float rounding.
+        XCTAssertEqual(bidInfo.cpm, winningBid.bid.price)
+        XCTAssertEqual(bidInfo.cpm?.doubleValue, 3.14)
+        // currency defaults to the ORTB "USD" when the response omits `cur`.
+        XCTAssertEqual(bidInfo.currency, bidResponse.rawResponse?.cur ?? "USD")
         XCTAssertEqual(bidInfo.creativeId, winningBid.bid.crid)
         XCTAssertEqual(bidInfo.adId, winningBid.bid.adid)
-        XCTAssertEqual(bidInfo.auctionId,
-                       bidResponse.rawResponse?.requestID ?? bidResponse.rawResponse?.bidid)
+        // requestId is the ORTB response id (identifies the request); no bidid fallback.
+        XCTAssertEqual(bidInfo.requestId, bidResponse.rawResponse?.requestID)
     }
 
-    // With no winning bid the economics must stay nil (e.g. a no-bid response).
+    // With no winning bid the winning-bid economics must stay nil (e.g. a no-bid response).
     func testBidInfoEconomicsAreNilWithoutWinningBid() {
         let bidResponse = BidResponse(jsonDictionary: [:])
         XCTAssertNil(bidResponse.winningBid)
@@ -544,6 +547,7 @@ class ResponseParsingTests: XCTestCase {
         let bidInfo = BidInfo.create(resultCode: .prebidDemandNoBids, bidResponse: bidResponse)
 
         XCTAssertNil(bidInfo.cpm)
+        XCTAssertNil(bidInfo.currency)
         XCTAssertNil(bidInfo.creativeId)
         XCTAssertNil(bidInfo.adId)
     }

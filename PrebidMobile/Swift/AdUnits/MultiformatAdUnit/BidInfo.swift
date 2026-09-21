@@ -45,20 +45,31 @@ public class BidInfo: NSObject {
     // Exact economics of the winning bid, surfaced on the original (GAM) API. Prebid normally
     // exposes only the bucketed `hb_pb` keyword; these read the winning bid's real values off the
     // (module-internal) ORTB response inside `create(...)`.
+    //
+    // `cpm`, `currency`, `creativeId` and `adId` describe the *winning* bid and are `nil` unless
+    // Prebid Server designated a winning bid — a top bid without `hb_pb`/`hb_bidder`/`hb_cache_id`
+    // targeting does not count as a winner. Do NOT read a nil `cpm` as a zero-price win.
+    // `requestId` is response-level and is present whenever the response parsed.
 
-    /// Winning bid net price (exact CPM), if any.
-    public private(set) var cpm: Double?
+    /// Winning bid net price (exact CPM), or `nil` when there is no winning bid.
+    ///
+    /// Typed `NSNumber?` (not `Double?`) so it is visible from Objective-C and carries the price
+    /// exactly as Prebid Server sent it — reading it as a `Float` first (as `Bid.price` does) would
+    /// round most decimal prices (e.g. `3.14` → `3.1400001…`).
+    public private(set) var cpm: NSNumber?
 
-    /// Bid currency (ISO-4217), from the ORTB bid response.
+    /// Currency (ISO-4217) for `cpm`. Defaults to `"USD"` — the ORTB default — when the response
+    /// omits `cur`. `nil` when there is no winning bid.
     public private(set) var currency: String?
 
-    /// Winning creative id (`crid`).
+    /// Winning creative id (`crid`), or `nil` when there is no winning bid.
     public private(set) var creativeId: String?
 
-    /// Auction id — the ORTB response id (falls back to the bidder response id `bidid`).
-    public private(set) var auctionId: String?
+    /// The Prebid request id — the ORTB `BidResponse.id`, a per-request UUID the SDK generates for
+    /// each bid request. It identifies this request, not an auction. `nil` if the response did not parse.
+    public private(set) var requestId: String?
 
-    /// Winning ad id (`adid`).
+    /// Winning ad id (`adid`), or `nil` when there is no winning bid.
     public private(set) var adId: String?
 
     /// Initializes a new `BidInfo` instance with the specified parameters.
@@ -68,14 +79,26 @@ public class BidInfo: NSObject {
     ///   - exp: Optional expiration time of the bid.
     ///   - nativeAdCacheId: Optional cache ID for native ads.
     ///   - events: Optional dictionary of events related to the bid.
+    ///   - cpm: Optional winning-bid net price (exact CPM).
+    ///   - currency: Optional currency (ISO-4217) for `cpm`.
+    ///   - creativeId: Optional winning creative id (`crid`).
+    ///   - adId: Optional winning ad id (`adid`).
+    ///   - requestId: Optional Prebid request id (ORTB `BidResponse.id`).
     public init(resultCode: ResultCode, targetingKeywords: [String : String]? = nil, exp: Double? = nil,
-                nativeAdCacheId: String? = nil, events: [String: String] = [:]) {
+                nativeAdCacheId: String? = nil, events: [String: String] = [:],
+                cpm: NSNumber? = nil, currency: String? = nil, creativeId: String? = nil,
+                adId: String? = nil, requestId: String? = nil) {
         self.resultCode = resultCode
         self.targetingKeywords = targetingKeywords
         self.exp = exp
         self.nativeAdCacheId = nativeAdCacheId
         self.events = events
-        
+        self.cpm = cpm
+        self.currency = currency
+        self.creativeId = creativeId
+        self.adId = adId
+        self.requestId = requestId
+
         super.init()
     }
     
@@ -108,14 +131,20 @@ public class BidInfo: NSObject {
         }
 
         // Surface exact economics of the winning bid (original-API analytics). These read the
-        // module-internal ORTB objects, which are only reachable here inside PrebidMobile.
+        // module-internal ORTB objects, which are only reachable here inside PrebidMobile, and stay
+        // nil unless Prebid Server designated a winning bid.
         if let winningBid = bidResponse.winningBid {
-            bidInfo.cpm = Double(winningBid.price)
+            // Read the raw ORTB price (NSNumber) rather than the computed `Bid.price` Float, so the
+            // value round-trips exactly and a missing price stays nil instead of becoming 0.0.
+            bidInfo.cpm = winningBid.bid.price
             bidInfo.creativeId = winningBid.bid.crid
             bidInfo.adId = winningBid.bid.adid
+            // ORTB defaults `cur` to "USD" when omitted; apply that so consumers needn't know the spec.
+            bidInfo.currency = bidResponse.rawResponse?.cur ?? "USD"
         }
-        bidInfo.currency = bidResponse.rawResponse?.cur
-        bidInfo.auctionId = bidResponse.rawResponse?.requestID ?? bidResponse.rawResponse?.bidid
+
+        // Response-level: the id of THIS bid request (ORTB `BidResponse.id`, an SDK-generated UUID).
+        bidInfo.requestId = bidResponse.rawResponse?.requestID
 
         return bidInfo
     }

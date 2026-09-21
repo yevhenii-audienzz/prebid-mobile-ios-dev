@@ -126,10 +126,9 @@ public class AdUnit: NSObject, DispatcherDelegate {
         adObject: AnyObject,
         completion: @escaping(_ result: ResultCode) -> Void
     ) {
-        baseFetchDemand(adObject: adObject) { bidInfo in
-            DispatchQueue.main.async {
-                completion(bidInfo.resultCode)
-            }
+        // Forward to the BidInfo variant so the main-queue dispatch lives in one place.
+        fetchDemandBidInfo(adObject: adObject) { bidInfo in
+            completion(bidInfo.resultCode)
         }
     }
 
@@ -138,16 +137,21 @@ public class AdUnit: NSObject, DispatcherDelegate {
     /// for ad serving, but returns the full `BidInfo` (including the winning-bid economics) instead
     /// of only the result code.
     ///
+    /// Named `fetchDemandBidInfo` rather than adding a `fetchDemand` overload on purpose: with a
+    /// trailing closure Swift ignores the argument label, so a second `fetchDemand(adObject:…)` whose
+    /// only difference is the closure's parameter type makes existing trailing-closure call sites
+    /// ambiguous (a source break).
+    ///
     /// - Parameters:
     ///   - adObject: The ad object for which demand is being fetched.
-    ///   - completionBidInfo: A closure called with a `BidInfo` object representing the fetched demand.
-    dynamic public func fetchDemand(
+    ///   - completion: A closure called with a `BidInfo` object representing the fetched demand.
+    public func fetchDemandBidInfo(
         adObject: AnyObject,
-        completionBidInfo: @escaping (_ bidInfo: BidInfo) -> Void
+        completion: @escaping (_ bidInfo: BidInfo) -> Void
     ) {
         baseFetchDemand(adObject: adObject) { bidInfo in
             DispatchQueue.main.async {
-                completionBidInfo(bidInfo)
+                completion(bidInfo)
             }
         }
     }
