@@ -15,7 +15,7 @@
 
 import XCTest
 
-@testable @_spi(PBMInternal) import PrebidMobile
+@_spi(PBMInternal) @testable import PrebidMobile
 
 class PBMBidRequesterTest: XCTestCase {
     private var sdkConfiguration: Prebid!
@@ -29,7 +29,7 @@ class PBMBidRequesterTest: XCTestCase {
     }
     
     override func tearDown() {
-        sdkConfiguration.requireServerSideBidCache = false
+        sdkConfiguration.filterOutUncachedBids = false
         sdkConfiguration = nil
         super.tearDown()
     }
@@ -38,7 +38,7 @@ class PBMBidRequesterTest: XCTestCase {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.someValidResponse)
+            callback(BidResponseTransformer.someValidResponse)
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
@@ -61,44 +61,72 @@ class PBMBidRequesterTest: XCTestCase {
     func testBanner_requireServerCacheAndNoCachedBids_returnsNoBidsError() {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+        adUnitConfig.adConfiguration.isOriginalAPI = true
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.makeValidResponse(bidPrice: 0.1))
+            callback(BidResponseTransformer.makeValidResponse(bidPrice: 0.1))
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
                                                    targeting: targeting,
                                                    adUnitConfiguration: adUnitConfig)
-        sdkConfiguration.requireServerSideBidCache = true
-        
+        sdkConfiguration.filterOutUncachedBids = true
+
         let exp = expectation(description: "exp")
         requester.requestBids { (bidResponse, error) in
             XCTAssertNil(bidResponse)
             XCTAssertEqual(error as NSError?, PBMError.noCachedBids() as NSError?)
             exp.fulfill()
         }
-        
+
         waitForExpectations(timeout: 5)
     }
-    
+
     func testBanner_requireServerCacheAndNoBids_returnsNoWinningBidError() {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+        adUnitConfig.adConfiguration.isOriginalAPI = true
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.noWinningBidResponse)
+            callback(BidResponseTransformer.noWinningBidResponse)
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
                                                    targeting: targeting,
                                                    adUnitConfiguration: adUnitConfig)
-        sdkConfiguration.requireServerSideBidCache = true
-        
+        sdkConfiguration.filterOutUncachedBids = true
+
         let exp = expectation(description: "exp")
         requester.requestBids { (bidResponse, error) in
             XCTAssertNil(bidResponse)
             XCTAssertEqual(error as NSError?, PBMError.noWinningBid() as NSError?)
             exp.fulfill()
         }
-        
+
+        waitForExpectations(timeout: 5)
+    }
+
+    func testRenderingAPI_filterOutUncachedBidsEnabled_bidNotFiltered() {
+        // filterOutUncachedBids must not affect Rendering API: creatives render directly
+        // from the bid's own markup and never depend on Prebid Cache.
+        let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
+        let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+        adUnitConfig.adConfiguration.isOriginalAPI = false
+        let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
+            callback(BidResponseTransformer.makeValidResponse(bidPrice: 0.1))
+        }])
+        let requester = Factory.createBidRequester(connection: connection,
+                                                   sdkConfiguration: sdkConfiguration,
+                                                   targeting: targeting,
+                                                   adUnitConfiguration: adUnitConfig)
+        sdkConfiguration.filterOutUncachedBids = true
+
+        let exp = expectation(description: "exp")
+        requester.requestBids { (bidResponse, error) in
+            XCTAssertNil(error)
+            XCTAssertNotNil(bidResponse)
+            XCTAssertEqual(bidResponse?.allBids?.count, 1)
+            exp.fulfill()
+        }
+
         waitForExpectations(timeout: 5)
     }
     
@@ -106,7 +134,7 @@ class PBMBidRequesterTest: XCTestCase {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.makeValidResponse(bidPrice: 0.1))
+            callback(BidResponseTransformer.makeValidResponse(bidPrice: 0.1))
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
@@ -127,18 +155,19 @@ class PBMBidRequesterTest: XCTestCase {
     func testBanner_requireServerCacheAndCachedBid_returnsBidResponse() {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+        adUnitConfig.adConfiguration.isOriginalAPI = true
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
             guard let responseBody = UtilitiesForTesting.loadFileAsStringFromBundle("cached_bid_response.json") else {
                 XCTFail("Expected cached_bid_response.json fixture.")
                 return
             }
-            callback(PBMBidResponseTransformer.buildResponse(responseBody))
+            callback(BidResponseTransformer.buildResponse(responseBody))
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
                                                    targeting: targeting,
                                                    adUnitConfiguration: adUnitConfig)
-        sdkConfiguration.requireServerSideBidCache = true
+        sdkConfiguration.filterOutUncachedBids = true
         
         let exp = expectation(description: "exp")
         requester.requestBids { (bidResponse, error) in
@@ -178,7 +207,7 @@ class PBMBidRequesterTest: XCTestCase {
         let accountID = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.invalidAccountIDResponse(accountID: accountID))
+            callback(BidResponseTransformer.invalidAccountIDResponse(accountID: accountID))
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
@@ -219,7 +248,7 @@ class PBMBidRequesterTest: XCTestCase {
         let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            callback(PBMBidResponseTransformer.invalidConfigIdResponse(configId: configId))
+            callback(BidResponseTransformer.invalidConfigIdResponse(configId: configId))
         }])
         let requester = Factory.createBidRequester(connection: connection,
                                                    sdkConfiguration: sdkConfiguration,
@@ -236,6 +265,26 @@ class PBMBidRequesterTest: XCTestCase {
         waitForExpectations(timeout: 5)
     }
     
+    func testBanner_missingResponseId_returnsDeserializationError() {
+        let adUnitConfig = AdUnitConfig(configId: "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4", size: CGSize(width: 300, height: 250))
+        let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
+            callback(BidResponseTransformer.missingIdResponse)
+        }])
+        let requester = Factory.createBidRequester(connection: connection,
+                                                   sdkConfiguration: sdkConfiguration,
+                                                   targeting: targeting,
+                                                   adUnitConfiguration: adUnitConfig)
+
+        let exp = expectation(description: "exp")
+
+        requester.requestBids { (bidResponse, error) in
+            XCTAssertNil(bidResponse)
+            XCTAssertEqual(error as NSError?, PBMError.responseDeserializationFailed() as NSError?)
+            exp.fulfill()
+        }
+        waitForExpectations(timeout: 5)
+    }
+
     func testBanner_invalidSize() {
         let adUnitConfig = AdUnitConfig(configId: "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4", size: CGSize(width: -300, height: 250))
         let connection = MockServerConnection()
@@ -279,7 +328,7 @@ class PBMBidRequesterTest: XCTestCase {
         let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                callback(PBMBidResponseTransformer.someValidResponse)
+                callback(BidResponseTransformer.someValidResponse)
             }
         }])
         let requester = Factory.createBidRequester(connection: connection,
@@ -308,6 +357,77 @@ class PBMBidRequesterTest: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+    // MARK: - Regression Tests for Issue #1323
+
+    /// Regression test for GitHub issue #1323: `timeoutMillisDynamic` is a millisecond value
+    /// (same unit as `timeoutMillis`), so it must be divided by 1000 before being used as the
+    /// `NSTimeInterval` passed to the network layer. Previously it was passed through unconverted,
+    /// turning a 500ms timeout into a 500 second one.
+    func testTimeoutMillisDynamic_ConvertedFromMillisecondsToSecondsForRequest() {
+        let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
+        let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+
+        // Simulates `Prebid.shared.timeoutMillis = 500` (or a previously-stored adaptive timeout).
+        sdkConfiguration.timeoutMillisDynamic = NSNumber(value: 500)
+
+        var capturedTimeout: TimeInterval = -1
+        let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
+            capturedTimeout = timeout
+            callback(BidResponseTransformer.someValidResponse)
+        }])
+        let requester = Factory.createBidRequester(connection: connection,
+                                                   sdkConfiguration: sdkConfiguration,
+                                                   targeting: targeting,
+                                                   adUnitConfiguration: adUnitConfig)
+
+        let exp = expectation(description: "exp")
+        requester.requestBids { (_, _) in
+            exp.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+
+        XCTAssertEqual(capturedTimeout, 0.5, accuracy: 0.0001)
+    }
+
+    /// Regression test for GitHub issue #1323: the adaptive timeout computed from the bid
+    /// response's `tmaxrequest` must be stored back into `timeoutMillisDynamic` in milliseconds,
+    /// consistent with every other place that property is read/written. Previously it was stored
+    /// as a raw seconds value (e.g. `0.5` instead of `500`).
+    func testAdaptiveTimeout_StoredInMillisecondsAfterBidResponse() {
+        let configId = "b6260e2b-bc4c-4d10-bdb5-f7bdd62f5ed4"
+        let adUnitConfig = AdUnitConfig(configId: configId, size: CGSize(width: 300, height: 250))
+
+        sdkConfiguration.timeoutMillis = 5000
+        // `timeoutMillisDynamic` must be nil for the adaptive-timeout branch to run.
+        sdkConfiguration.timeoutMillisDynamic = nil
+
+        let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
+            callback(BidResponseTransformer.makeValidResponseWithTmax(bidPrice: 0.1, tmaxrequest: 300))
+        }])
+        let requester = Factory.createBidRequester(connection: connection,
+                                                   sdkConfiguration: sdkConfiguration,
+                                                   targeting: targeting,
+                                                   adUnitConfiguration: adUnitConfig)
+
+        let exp = expectation(description: "exp")
+        requester.requestBids { (_, _) in
+            exp.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+
+        guard let dynamicTimeout = sdkConfiguration.timeoutMillisDynamic else {
+            XCTFail("Expected an adaptive timeout to be set")
+            return
+        }
+
+        // With `tmaxrequest` = 300ms, the adaptive timeout should be on the order of hundreds of
+        // milliseconds. If it were mistakenly stored in seconds (pre-fix behavior) it would be < 1.
+        XCTAssertGreaterThan(dynamicTimeout.doubleValue, 100)
+        XCTAssertLessThan(dynamicTimeout.doubleValue, 5000)
+    }
+
     // MARK: - Regression Tests for Issue #1195
 
     /// Regression test for GitHub issue #1195 crash fix.
@@ -324,12 +444,12 @@ class PBMBidRequesterTest: XCTestCase {
         // Mock connection that calls the callback TWICE to simulate the race condition
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
             NSLog("[TEST] First callback invocation")
-            callback(PBMBidResponseTransformer.someValidResponse)
+            callback(BidResponseTransformer.someValidResponse)
 
             // Simulate duplicate callback after a small delay (like redirect or retry)
             DispatchQueue.global(qos: .default).asyncAfter(deadline: .now() + 0.1) {
                 NSLog("[TEST] Second callback invocation (DUPLICATE - should be handled safely)")
-                callback(PBMBidResponseTransformer.someValidResponse)
+                callback(BidResponseTransformer.someValidResponse)
             }
         }])
 
@@ -375,7 +495,7 @@ class PBMBidRequesterTest: XCTestCase {
 
         // Mock connection that calls callback from multiple threads simultaneously
         let connection = MockServerConnection(onPost: [{ (url, data, timeout, callback) in
-            let response = PBMBidResponseTransformer.someValidResponse
+            let response = BidResponseTransformer.someValidResponse
 
             // Call from multiple threads at nearly the same time
             DispatchQueue.global(qos: .userInitiated).async {

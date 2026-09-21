@@ -13,10 +13,6 @@
  limitations under the License.
  */
 
-#import "PBMBidResponseTransformer.h"
-
-#import "PBMPrebidParameterBuilder.h"
-#import "PBMParameterBuilderService.h"
 #import "Log+Extensions.h"
 #import <UIKit/UIKit.h>
 #import "SwiftImport.h"
@@ -84,8 +80,10 @@
     
     const NSInteger rawTimeoutMS_onRead     = self.sdkConfiguration.timeoutMillis;
     NSNumber * const dynamicTimeout_onRead  = self.sdkConfiguration.timeoutMillisDynamic;
-    
-    const NSTimeInterval postTimeout = (dynamicTimeout_onRead ? dynamicTimeout_onRead.doubleValue : (rawTimeoutMS_onRead / 1000.0));
+
+    // `timeoutMillisDynamic` is stored in milliseconds (same unit as `timeoutMillis`),
+    // so it must be converted to seconds before being used as an NSTimeInterval.
+    const NSTimeInterval postTimeout = (dynamicTimeout_onRead ? (dynamicTimeout_onRead.doubleValue / 1000.0) : (rawTimeoutMS_onRead / 1000.0));
     
     NSData *rtbRequestData = [requestString dataUsingEncoding:NSUTF8StringEncoding];
     
@@ -128,12 +126,18 @@
         NSError *trasformationError = nil;
         BidResponse * const _Nullable bidResponse = [PBMBidResponseTransformer transformResponse:serverResponse error:&trasformationError];
         
-        if (bidResponse && !trasformationError) {
-            if (self.sdkConfiguration.requireServerSideBidCache) {
+        if (bidResponse) {
+            // filterOutUncachedBids applies to Original API only. Rendering API renders
+            // creatives directly from the bid's own markup and never depends on Prebid
+            // Cache to display an ad, so a cache failure there is not a demand failure.
+            if (self.sdkConfiguration.filterOutUncachedBids && self.adUnitConfiguration.adConfiguration.isOriginalAPI) {
                 NSInteger bidCount = bidResponse.allBids.count;
                 NSInteger removedBids = [bidResponse removeBidsWithoutSuccessfulCache];
                 if (removedBids > 0) {
                     PBMLogWarn(@"Ignored %ld bids without successful Prebid Cache entries.", (long)removedBids);
+                }
+                if (bidResponse.topBidWasFiltered) {
+                    PBMLogWarn(@"Top bid was filtered due to failed Prebid Cache entry; promoted next best cached bid.");
                 }
                 if (!bidResponse.winningBid) {
                     NSError *error = bidCount > 0 && bidCount == removedBids ? PBMError.noCachedBids : PBMError.noWinningBid;
@@ -157,7 +161,9 @@
                     const NSInteger rawTimeoutMS_onWrite = self.sdkConfiguration.timeoutMillis;
                     const NSTimeInterval appTimeout = rawTimeoutMS_onWrite / 1000.0;
                     const NSTimeInterval updatedTimeout = MIN(remoteTimeout, appTimeout);
-                    self.sdkConfiguration.timeoutMillisDynamic = @(updatedTimeout);
+                    // `timeoutMillisDynamic` must be stored in milliseconds (same unit as
+                    // `timeoutMillis`), so convert the seconds-based `updatedTimeout` back to ms.
+                    self.sdkConfiguration.timeoutMillisDynamic = @(updatedTimeout * 1000.0);
                     self.sdkConfiguration.timeoutUpdated = true;
                 };
             }

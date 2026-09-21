@@ -137,14 +137,12 @@ public class AdUnit: NSObject, DispatcherDelegate {
     /// for ad serving, but returns the full `BidInfo` (including the winning-bid economics) instead
     /// of only the result code.
     ///
-    /// Named `fetchDemandBidInfo` rather than adding a `fetchDemand` overload on purpose: with a
-    /// trailing closure Swift ignores the argument label, so a second `fetchDemand(adObject:…)` whose
-    /// only difference is the closure's parameter type makes existing trailing-closure call sites
-    /// ambiguous (a source break).
-    ///
     /// - Parameters:
     ///   - adObject: The ad object for which demand is being fetched.
     ///   - completion: A closure called with a `BidInfo` object representing the fetched demand.
+    // Named `fetchDemandBidInfo` rather than a `fetchDemand` overload on purpose: with a trailing
+    // closure Swift ignores the argument label, so a second `fetchDemand(adObject:…)` differing only
+    // by the closure's parameter type makes existing trailing-closure call sites ambiguous.
     public func fetchDemandBidInfo(
         adObject: AnyObject,
         completion: @escaping (_ bidInfo: BidInfo) -> Void
@@ -278,10 +276,15 @@ public class AdUnit: NSObject, DispatcherDelegate {
         if let adObject {
             Utils.shared.validateAndAttachKeywords(adObject: adObject, bidResponse: bidResponse)
         }
-        
+
+        // A promoted runner-up is still successfully returned demand: the winning bid is
+        // cached and its targeting is attached to the ad object. Reporting anything other
+        // than prebidDemandFetchSuccess here would make the standard
+        // `resultCode == .prebidDemandFetchSuccess` integration check drop usable demand.
+        // The yield signal is surfaced separately via `BidInfo.topBidFiltered`.
         return .prebidDemandFetchSuccess
     }
-    
+
     private func cacheBidIfNeeded(_ winningBid: Bid) -> String? {
         let isNative = winningBid.adFormat == .native
         let isSkadnPresent = winningBid.skadn != nil && SkadnParametersManager

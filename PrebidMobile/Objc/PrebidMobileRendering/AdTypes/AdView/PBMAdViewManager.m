@@ -13,11 +13,11 @@
  limitations under the License.
  */
 
+#import <UIKit/UIKit.h>
+
 #import "PBMAdLoadManagerProtocol.h"
-#import "PBMFunctions+Private.h"
 #import "PBMInterstitialLayoutConfigurator.h"
 #import "PBMVideoCreative.h"
-#import "UIView+PBMExtensions.h"
 
 #import "PBMMacros.h"
 #import "Log+Extensions.h"
@@ -150,6 +150,12 @@
 }
 
 #pragma mark - PBMCreativeViewDelegate
+
+- (void)videoDidStart:(id<PBMAbstractCreative>)creative {
+    if ([self.adViewManagerDelegate respondsToSelector:@selector(videoAdDidStart)]) {
+        [self.adViewManagerDelegate videoAdDidStart];
+    }
+}
 
 - (void)videoCreativeDidComplete:(id<PBMAbstractCreative>)creative {
     if ([self.adViewManagerDelegate respondsToSelector:@selector(videoAdDidFinish)]) {

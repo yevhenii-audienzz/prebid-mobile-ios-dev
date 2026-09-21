@@ -16,13 +16,11 @@
 #import <UIKit/UIKit.h>
 #import <MobileCoreServices/MobileCoreServices.h>
 
-#import "PBMFunctions+Private.h"
 #import "PBMMacros.h"
 #import "PBMModalState.h"
 #import "PBMOpenMeasurementSession.h"
 #import "PBMVideoCreative.h"
 #import "PBMVideoView.h"
-#import "UIView+PBMExtensions.h"
 #import "Log+Extensions.h"
 
 #import "SwiftImport.h"
@@ -253,7 +251,10 @@ static CGSize const MUTE_BUTTON_SIZE = { 24, 24 };
                                                name:AVPlayerItemDidPlayToEndTimeNotification
                                              object:playerItem];
     
-    [AVAudioSession.sharedInstance setActive:YES error:nil];
+    // Note: intentionally not calling `setActive:YES` here. Activating the shared audio session
+    // is a synchronous call that can block the main thread and interrupts audio already playing
+    // in other apps, even though this is only needed to observe `outputVolume` via KVO, which
+    // works without activating the session.
     [AVAudioSession.sharedInstance addObserver:self forKeyPath:PBMAudioSessionObserverKeyVoulume options:NSKeyValueObservingOptionNew context:nil];
 }
 
@@ -573,6 +574,7 @@ static CGSize const MUTE_BUTTON_SIZE = { 24, 24 };
     self.btnWatchAgain = nil;
     
     [self trackStartPlaybackEvents];
+    [self notifyVideoDidStart];
 }
 
 - (void)btnMuteClick:(UIButton *)button {
@@ -616,6 +618,7 @@ static CGSize const MUTE_BUTTON_SIZE = { 24, 24 };
 
     if (isFirstPlayback) {
         [self trackStartPlaybackEvents];
+        [self notifyVideoDidStart];
     }
 }
 
@@ -801,7 +804,11 @@ static CGSize const MUTE_BUTTON_SIZE = { 24, 24 };
         self.progressBar.hidden = YES;
     }
     
-    if (self.adConfiguration.isBuiltInVideo && !self.creative.creativeModel.hasCompanionAd) {
+    BOOL shouldOfferReplay = self.adConfiguration.isBuiltInVideo ||
+        (self.adConfiguration.presentAsInterstitial &&
+         !self.adConfiguration.isRewarded &&
+         !self.adConfiguration.videoControlsConfig.isAutoCloseOnCompletionEnabled);
+    if (shouldOfferReplay && !self.creative.creativeModel.hasCompanionAd) {
         // UI: need to give some time to hide the interstitial before showing the Watch Again
         if (self.adConfiguration.presentAsInterstitial) {
             @weakify(self);
@@ -904,6 +911,12 @@ static CGSize const MUTE_BUTTON_SIZE = { 24, 24 };
                                             volume:self.avPlayer.volume];
     
     PBMLogInfo(@"Video Playback Progress: PBMTrackingEventCreativeView/PBMTrackingEventStart");
+}
+
+- (void)notifyVideoDidStart {
+    if ([self.creative.creativeViewDelegate respondsToSelector:@selector(videoDidStart:)]) {
+        [self.creative.creativeViewDelegate videoDidStart:self.creative];
+    }
 }
 
 // pause avPlayer and notify videoViewCompletedDisplay if video reached the VAST Duration
